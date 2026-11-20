@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "dapkeel"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Blazing-fast, agent-first Rust CLI for Instructure Data Access Platform (Canvas Data 2) with ODCS contract export and PostgreSQL COPY replication."
 readme = "README.md"
 license = { text = "MIT OR Apache-2.0" }
