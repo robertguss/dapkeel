@@ -216,12 +216,13 @@ fn parse_column(
     let (pg_type, keel_type) = match (json_type, format) {
         ("integer", Some("int32")) => ("INTEGER", "integer"),
         ("integer", _) => ("BIGINT", "integer"),
-        ("number", _) => ("DOUBLE PRECISION", "float"),
+        ("number", _) => ("DOUBLE PRECISION", "number"),
         ("boolean", _) => ("BOOLEAN", "boolean"),
         ("string", Some("date-time")) => ("TIMESTAMPTZ", "timestamp"),
         ("string", Some("date")) => ("DATE", "date"),
         ("string", Some("uuid")) => ("UUID", "string"),
-        ("object", _) | ("array", _) => ("JSONB", "json"),
+        ("array", _) => ("JSONB", "array"),
+        ("object", _) => ("JSONB", "object"),
         _ => ("TEXT", "string"),
     };
 
@@ -319,13 +320,21 @@ pub fn to_datakeel_toml(spec: &TableSpec) -> String {
     out.push('\n');
 
     for col in &spec.columns {
-        out.push_str("[[columns]]\n");
-        out.push_str(&format!("name = \"{}\"\n", col.name));
+        out.push_str(&format!("[columns.{}]\n", col.name));
         out.push_str(&format!("type = \"{}\"\n", col.keel_type));
-        out.push_str(&format!("nullable = {}\n", col.nullable));
+        out.push_str(&format!("physical_type = \"{}\"\n", col.pg_type));
+        if !col.nullable {
+            out.push_str("required = true\n");
+        }
         if col.is_primary_key {
             out.push_str("primary_key = true\n");
             out.push_str("unique = true\n");
+        }
+        if let Some(desc) = &col.description {
+            out.push_str(&format!(
+                "description = {}\n",
+                serde_json::to_string(desc).unwrap_or_else(|_| "\"\"".to_string())
+            ));
         }
         if !col.enum_values.is_empty() {
             let quoted: Vec<String> = col
@@ -333,7 +342,7 @@ pub fn to_datakeel_toml(spec: &TableSpec) -> String {
                 .iter()
                 .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "\"\"".to_string()))
                 .collect();
-            out.push_str(&format!("allowed_values = [{}]\n", quoted.join(", ")));
+            out.push_str(&format!("enum = [{}]\n", quoted.join(", ")));
         }
         out.push('\n');
     }
@@ -426,7 +435,8 @@ mod tests {
         assert!(odcs.contains("primaryKey: true"));
 
         let toml_str = to_datakeel_toml(&spec);
+        assert!(toml_str.contains("[columns.id]"));
         assert!(toml_str.contains("primary_key = true"));
-        assert!(toml_str.contains("allowed_values = [\"registered\", \"deleted\"]"));
+        assert!(toml_str.contains("enum = [\"registered\", \"deleted\"]"));
     }
 }
