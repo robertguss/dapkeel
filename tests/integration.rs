@@ -392,6 +392,66 @@ async fn rejects_missing_table_access_grant() {
     assert_eq!(val["error"]["code"], "DAP_TABLE_ACCESS_DENIED");
 }
 
+#[tokio::test]
+async fn auto_falls_back_from_oauth_v3_to_ids_v2() {
+    let server = MockServer::start().await;
+    let jwt = fake_jwt(chrono::Utc::now().timestamp() + 3600);
+
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": "invalid_client",
+            "error_description": "Client authentication failed: client_secret"
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/ids/auth/login"))
+        .and(header_exists("authorization"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": jwt,
+            "expires_in": 3600,
+            "scope": "dap",
+            "token_type": "Bearer"
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/dap/query/canvas/table"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "tables": ["courses", "users"]
+        })))
+        .mount(&server)
+        .await;
+
+    let out = dapkeel()
+        .args([
+            "--api-url",
+            &server.uri(),
+            "--client-id",
+            "cid",
+            "--client-secret",
+            "csec",
+            "--format",
+            "agent",
+            "list",
+            "--namespace",
+            "canvas",
+        ])
+        .output()
+        .expect("run list with fallback");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let val: Value = serde_json::from_slice(&out.stdout).expect("json");
+    assert_eq!(val["ok"], true);
+    assert_eq!(val["tables"], json!(["courses", "users"]));
+}
+
 #[test]
 fn skill_command_prints_and_installs() {
     let out = dapkeel().args(["skill"]).output().expect("skill");

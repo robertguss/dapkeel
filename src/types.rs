@@ -26,6 +26,17 @@ pub enum ContractFormat {
     Toml,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthMode {
+    /// Try DAP v3 /oauth/token first; automatically fall back to DAP v2 /ids/auth/login on 401/404
+    Auto,
+    /// Strict DAP v3 OAuth 2.0 (/oauth/token with per-table authorization_details)
+    Oauth,
+    /// Legacy DAP v2 Identity Service (/ids/auth/login)
+    Ids,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NamespaceList {
     pub namespaces: Vec<String>,

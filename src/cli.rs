@@ -1,6 +1,6 @@
 use crate::output::OutputFormat;
 use crate::pg::DEFAULT_META_SCHEMA;
-use crate::types::{ContractFormat, DataFormat, DataMode};
+use crate::types::{AuthMode, ContractFormat, DataFormat, DataMode};
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -34,6 +34,10 @@ pub struct Cli {
     /// Concurrent pre-signed object downloads
     #[arg(long, global = true, default_value_t = 4)]
     pub concurrency: usize,
+
+    /// Authentication flow: auto (v3 OAuth -> v2 IDS fallback), oauth (v3 only), ids (v2 only)
+    #[arg(long, global = true, value_enum, default_value_t = AuthMode::Auto)]
+    pub auth_mode: AuthMode,
 
     #[command(subcommand)]
     pub command: Command,

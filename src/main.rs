@@ -87,6 +87,7 @@ fn build_client(cli: &Cli) -> Result<DapClient, DapError> {
         cli.client_secret.clone().unwrap_or_default(),
         cli.poll_interval_ms,
         cli.concurrency,
+        cli.auth_mode,
     )
 }
 

@@ -1,8 +1,8 @@
 use crate::error::DapError;
 use crate::types::{
-    DapApiErrorEnvelope, DapObject, DataFormat, DataMode, IncrementalQueryRequest, JobResponse,
-    JobStatus, NamespaceList, OAuthErrorBody, ResourceEntry, ResourceResult, SnapshotQueryRequest,
-    TableList, TokenResponse, VersionedSchema,
+    AuthMode, DapApiErrorEnvelope, DapObject, DataFormat, DataMode, IncrementalQueryRequest,
+    JobResponse, JobStatus, NamespaceList, OAuthErrorBody, ResourceEntry, ResourceResult,
+    SnapshotQueryRequest, TableList, TokenResponse, VersionedSchema,
 };
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -51,11 +51,18 @@ impl TableAccess {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResolvedAuthFlow {
+    OauthV3,
+    IdsV2,
+}
+
 #[derive(Debug, Clone)]
 struct CachedToken {
     token: String,
     expires_at: DateTime<Utc>,
     access: TableAccess,
+    flow: ResolvedAuthFlow,
 }
 
 impl CachedToken {
@@ -73,6 +80,7 @@ pub struct DapClient {
     token_cache: Arc<Mutex<Option<CachedToken>>>,
     poll_interval: Duration,
     download_concurrency: usize,
+    auth_mode: AuthMode,
 }
 
 impl DapClient {
@@ -82,21 +90,24 @@ impl DapClient {
         client_secret: String,
         poll_interval_ms: u64,
         download_concurrency: usize,
+        auth_mode: AuthMode,
     ) -> Result<Self, DapError> {
         let base_url = base_url.trim().trim_end_matches('/').to_string();
+        let client_id = client_id.trim().to_string();
+        let client_secret = client_secret.trim().to_string();
         if base_url.is_empty() {
             return Err(DapError::config(
                 "Missing DAP API base URL",
                 "Set DAP_API_URL (e.g. https://us-east-1.api-gateway.instructure.com) or pass --api-url.",
             ));
         }
-        if client_id.trim().is_empty() {
+        if client_id.is_empty() {
             return Err(DapError::config(
                 "Missing DAP client ID",
                 "Set DAP_CLIENT_ID or pass --client-id (obtained from identity.instructure.com).",
             ));
         }
-        if client_secret.trim().is_empty() {
+        if client_secret.is_empty() {
             return Err(DapError::config(
                 "Missing DAP client secret",
                 "Set DAP_CLIENT_SECRET or pass --client-secret (obtained from identity.instructure.com).",
@@ -143,14 +154,18 @@ impl DapClient {
             token_cache: Arc::new(Mutex::new(None)),
             poll_interval: Duration::from_millis(poll_interval_ms.max(10)),
             download_concurrency: download_concurrency.max(1),
+            auth_mode,
         })
     }
 
     async fn authenticate(&self, access: TableAccess) -> Result<String, DapError> {
         let mut guard = self.token_cache.lock().await;
+        let prev_flow = guard.as_ref().map(|c| c.flow);
         if let Some(cached) = guard.as_ref()
             && !cached.is_expiring()
-            && (cached.access == access || access.table.is_none())
+            && (cached.flow == ResolvedAuthFlow::IdsV2
+                || cached.access == access
+                || access.table.is_none())
         {
             return Ok(cached.token.clone());
         }
@@ -158,6 +173,51 @@ impl DapClient {
         // Clear stale token before requesting a fresh one.
         *guard = None;
 
+        let (tok, flow) = match self.auth_mode {
+            AuthMode::Ids => (self.post_ids_login().await?, ResolvedAuthFlow::IdsV2),
+            AuthMode::Oauth => (
+                self.post_oauth_token(&access).await?,
+                ResolvedAuthFlow::OauthV3,
+            ),
+            AuthMode::Auto => {
+                if prev_flow == Some(ResolvedAuthFlow::IdsV2) {
+                    (self.post_ids_login().await?, ResolvedAuthFlow::IdsV2)
+                } else {
+                    match self.post_oauth_token(&access).await {
+                        Ok(t) => (t, ResolvedAuthFlow::OauthV3),
+                        Err(oauth_err) if should_fallback_to_ids(&oauth_err) => {
+                            match self.post_ids_login().await {
+                                Ok(t) => (t, ResolvedAuthFlow::IdsV2),
+                                Err(_) => return Err(oauth_err),
+                            }
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
+        };
+
+        if flow == ResolvedAuthFlow::OauthV3
+            && let (Some(ns), Some(tbl)) = (&access.namespace, &access.table)
+        {
+            verify_granted_table_access(ns, tbl, tok.authorization_details.as_ref())?;
+        }
+
+        let expires_at = decode_jwt_expiry(&tok.access_token).unwrap_or_else(|| {
+            Utc::now() + ChronoDuration::seconds(tok.expires_in.unwrap_or(3600))
+        });
+
+        let cached = CachedToken {
+            token: tok.access_token.clone(),
+            expires_at,
+            access,
+            flow,
+        };
+        *guard = Some(cached);
+        Ok(tok.access_token)
+    }
+
+    async fn post_oauth_token(&self, access: &TableAccess) -> Result<TokenResponse, DapError> {
         let mut form: Vec<(&str, String)> = vec![
             ("grant_type", "client_credentials".to_string()),
             ("scope", "dap".to_string()),
@@ -220,28 +280,49 @@ impl DapClient {
             ));
         }
 
-        let tok: TokenResponse = serde_json::from_str(&body).map_err(|e| {
+        serde_json::from_str::<TokenResponse>(&body).map_err(|e| {
             DapError::auth(
                 format!("Invalid OAuth token JSON response: {e}"),
                 "Verify DAP_API_URL points to your regional Instructure API Gateway.",
             )
+        })
+    }
+
+    async fn post_ids_login(&self) -> Result<TokenResponse, DapError> {
+        let form = [("grant_type", "client_credentials")];
+        let url = format!("{}/ids/auth/login", self.base_url);
+        let resp = self
+            .api_http
+            .post(&url)
+            .header(AUTHORIZATION, format!("Basic {}", self.basic_credentials))
+            .form(&form)
+            .send()
+            .await
+            .map_err(|e| {
+                DapError::auth(
+                    format!("IDS auth request to {url} failed: {e}"),
+                    "Check DAP_API_URL and network connectivity.",
+                )
+            })?;
+
+        let status = resp.status();
+        let body = resp.text().await.map_err(|e| {
+            DapError::auth(
+                format!("Failed reading IDS auth response body: {e}"),
+                "Retry the request or verify DAP_API_URL.",
+            )
         })?;
 
-        if let (Some(ns), Some(tbl)) = (&access.namespace, &access.table) {
-            verify_granted_table_access(ns, tbl, tok.authorization_details.as_ref())?;
+        if !status.is_success() {
+            return Err(map_api_error(status, "/ids/auth/login", &body));
         }
 
-        let expires_at = decode_jwt_expiry(&tok.access_token).unwrap_or_else(|| {
-            Utc::now() + ChronoDuration::seconds(tok.expires_in.unwrap_or(3600))
-        });
-
-        let cached = CachedToken {
-            token: tok.access_token.clone(),
-            expires_at,
-            access,
-        };
-        *guard = Some(cached);
-        Ok(tok.access_token)
+        serde_json::from_str::<TokenResponse>(&body).map_err(|e| {
+            DapError::auth(
+                format!("Invalid IDS auth JSON response: {e}"),
+                "Verify DAP_API_URL points to your Instructure API Gateway.",
+            )
+        })
     }
 
     async fn api_request<B: Serialize + ?Sized, R: DeserializeOwned>(
@@ -755,6 +836,11 @@ fn map_api_error(status: StatusCode, path: &str, body: &str) -> DapError {
         None,
         Some(serde_json::json!({ "http_status": status.as_u16(), "path": path })),
     )
+}
+
+fn should_fallback_to_ids(err: &DapError) -> bool {
+    let msg = err.to_string();
+    msg.contains("HTTP 401") || msg.contains("HTTP 404") || msg.contains("invalid_client")
 }
 
 fn truncate(s: &str, max: usize) -> String {
