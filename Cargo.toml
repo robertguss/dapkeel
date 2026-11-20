@@ -1,6 +1,6 @@
 [package]
 name = "dapkeel"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Blazing-fast, agent-first (DX + AX) Rust CLI for Instructure's Data Access Platform (Canvas Data 2) with ODCS contract export, streaming JSONL unpack, and atomic PostgreSQL COPY replication."
