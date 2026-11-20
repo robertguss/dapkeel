@@ -1,0 +1,32 @@
+[build-system]
+requires = ["maturin>=1.8,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "dapkeel"
+version = "0.1.0"
+description = "Blazing-fast, agent-first Rust CLI for Instructure Data Access Platform (Canvas Data 2) with ODCS contract export and PostgreSQL COPY replication."
+readme = "README.md"
+license = { text = "MIT OR Apache-2.0" }
+requires-python = ">=3.8"
+keywords = ["canvas", "instructure", "dap", "canvas-data-2", "postgres", "etl", "rust"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Rust",
+    "Topic :: Database",
+    "Topic :: Education",
+]
+
+[project.urls]
+Homepage = "https://github.com/robertguss/dapkeel"
+Repository = "https://github.com/robertguss/dapkeel"
+
+[tool.maturin]
+bindings = "bin"
+strip = true
+compatibility = "pypi"
+features = ["vendored-tls"]

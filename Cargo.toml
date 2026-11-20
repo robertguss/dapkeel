@@ -1,0 +1,43 @@
+[package]
+name = "dapkeel"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Blazing-fast, agent-first (DX + AX) Rust CLI for Instructure's Data Access Platform (Canvas Data 2) with ODCS contract export, streaming JSONL unpack, and atomic PostgreSQL COPY replication."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/robertguss/dapkeel"
+homepage = "https://github.com/robertguss/dapkeel"
+keywords = ["canvas", "instructure", "dap", "postgres", "etl"]
+categories = ["command-line-utilities", "development-tools", "database"]
+
+[features]
+default = []
+# Statically vendor OpenSSL on Linux for portable manylinux wheels / release binaries.
+vendored-tls = ["native-tls/vendored"]
+
+[dependencies]
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.6", features = ["derive", "env"] }
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+futures-util = "0.3"
+indexmap = { version = "2.14", features = ["serde"] }
+native-tls = "0.2"
+owo-colors = { version = "4.4", features = ["supports-colors"] }
+postgres = { version = "0.19", features = ["with-chrono-0_4", "with-serde_json-1"] }
+postgres-native-tls = "0.5"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form", "stream", "gzip", "brotli", "deflate"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml_ng = "0.10"
+thiserror = "2.0"
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "time", "sync", "fs"] }
+toml = "1.2"
+url = "2.5"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+assert_cmd = "2.2"
+predicates = "3.1"
+tempfile = "3.27"
+wiremock = "0.6"
